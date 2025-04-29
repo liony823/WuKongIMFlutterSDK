@@ -82,11 +82,32 @@ class WKConnectionManager {
   final heartIntervalSecond = const Duration(seconds: 60);
   final checkNetworkSecond = const Duration(seconds: 1);
   int unReceivePongCount = 0;
+  int connDelayMilliseconds = 0;
   final LinkedHashMap<int, SendingMsg> _sendingMsgMap = LinkedHashMap();
   HashMap<String, Function(int, int?, ConnectionInfo?)>? _connectionListenerMap;
+  HashMap<String, Function(int)>? _connectionDelayListenerMap;
   _WKSocket? _socket;
   ConnectivityResult? lastConnectivityResult;
   final Connectivity _connectivity = Connectivity();
+
+  addOnConnectionDelay(String key, Function(int) back) {
+    _connectionDelayListenerMap ??= HashMap();
+    _connectionDelayListenerMap![key] = back;
+  }
+
+  removeConnectionDelay(String key) {
+    if (_connectionDelayListenerMap != null) {
+      _connectionDelayListenerMap!.remove(key);
+    }
+  }
+
+  setConnectionDelay(int delay) {
+    if (_connectionDelayListenerMap != null) {
+      _connectionDelayListenerMap!.forEach((key, back) {
+        back(delay);
+      });
+    }
+  }
 
   addOnConnectionStatus(String key, Function(int, int?, ConnectionInfo?) back) {
     _connectionListenerMap ??= HashMap();
@@ -161,14 +182,20 @@ class WKConnectionManager {
     var port = addrs[1];
     try {
       setConnectionStatus(WKConnectStatus.connecting);
+      final startDelay = DateTime.now();
       Socket.connect(host, int.parse(port), timeout: const Duration(seconds: 5))
           .then((socket) {
         _socket = _WKSocket.newSocket(socket);
         _connectSuccess();
+        final endDelay = DateTime.now();
+        connDelayMilliseconds = endDelay.difference(startDelay).inMilliseconds;
+        setConnectionDelay(connDelayMilliseconds);
       }).catchError((err) {
         _connectFail(err);
+        setConnectionDelay(-1);
       }).onError((err, stackTrace) {
         _connectFail(err);
+        setConnectionDelay(-1);
       });
     } catch (e) {
       Logs.error(e.toString());
@@ -370,8 +397,13 @@ class WKConnectionManager {
 
   _sendPacket(Packet packet) async {
     var data = WKIM.shared.options.proto.encode(packet);
+
     if (!isReconnection) {
+      final startDelay = DateTime.now();
       await _socket?.send(data);
+      final endDelay = DateTime.now();
+      connDelayMilliseconds = endDelay.difference(startDelay).inMilliseconds;
+      setConnectionDelay(connDelayMilliseconds);
     }
   }
 
